@@ -1,0 +1,24 @@
+# === 0. Hubungkan Google Drive ===
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Ganti path ini dengan lokasi folder dataset kamu di Google Drive
+dataset_dir = '/content/drive/MyDrive/noken_dataset'  # pastikan ada subfolder Woll/ dan Asli/
+
+# === 1. Import Library ===
+
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.utils import to_categorical
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import classification_report, confusion_matrix
