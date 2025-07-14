@@ -1,5 +1,4 @@
 # === 0. Hubungkan Google Drive ===
-
 from google.colab import drive
 drive.mount('/content/drive')
 
@@ -7,7 +6,6 @@ drive.mount('/content/drive')
 dataset_dir = '/content/drive/MyDrive/noken_dataset'  # pastikan ada subfolder Woll/ dan Asli/
 
 # === 1. Import Library ===
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,3 +20,336 @@ from tensorflow.keras.utils import to_categorical
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, confusion_matrix
+
+
+# === 2. Parameter Dataset ===
+classes = ['Woll', 'Asli']
+image_size = (128, 128)
+
+
+# === 3. Ekstraksi Fitur dengan CNN (MobileNetV2) ===
+base_cnn = MobileNetV2(weights='imagenet', include_top=False, input_shape=(128, 128, 3), pooling='avg')
+
+X = []
+y = []
+filenames = []  # untuk tracking nama file
+
+for label_index, label_name in enumerate(classes):
+    folder = os.path.join(dataset_dir, label_name)
+    for fname in os.listdir(folder):
+        if fname.endswith(('.jpg', '.png')):
+            path = os.path.join(folder, fname)
+            img = load_img(path, target_size=image_size)
+            img_array = img_to_array(img)
+            img_array = preprocess_input(img_array)
+            img_array = np.expand_dims(img_array, axis=0)
+
+            features = base_cnn.predict(img_array, verbose=0)
+            X.append(features[0])
+            y.append(label_index)
+            filenames.append(fname)
+
+X = np.array(X)
+y = np.array(y)
+y_cat = to_categorical(y, num_classes=2)
+
+
+# === 4. Split Dataset dan Scaling ===
+# Tahap 1: Split ke Train Full dan Test
+X_train_full, X_test, y_train_full, y_test = train_test_split(
+    X, y_cat, test_size=0.2, stratify=y, random_state=42
+)
+
+# Tahap 2: Split Train Full menjadi Train dan Validation
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train_full, y_train_full,
+    test_size=0.2,
+    stratify=np.argmax(y_train_full, axis=1),
+    random_state=42
+)
+
+X_train, X_test, y_train, y_test, filenames_train, filenames_test = train_test_split(
+    X, y_cat, filenames, test_size=0.2, stratify=y, random_state=42)
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_val_scaled = scaler.transform(X_val)      # ✅ Tambahkan ini
+X_test_scaled = scaler.transform(X_test)
+
+
+# === 5. Model MLP ===
+model = Sequential([
+    Dense(64, activation='relu', input_shape=(X_train_scaled.shape[1],)),
+    Dropout(0.5),
+    Dense(32, activation='relu'),
+    Dropout(0.5),
+    Dense(2, activation='softmax')
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+history = model.fit(X_train_scaled, y_train,
+                    validation_data=(X_val_scaled, y_val),
+                    epochs=10,
+                    batch_size=32,
+                    verbose=1)
+
+# ===6. Menyiapkan Data Test dengan Path Gambar ===
+
+# === 1. Menyiapkan Data Test dengan Path Gambar ===
+# Kita perlu mencocokkan filenames_test dengan X_test, y_test, y_pred_classes, dan scores.
+# filenames_test sudah di-split bersamaan dengan X dan y_cat sebelumnya.
+
+# Predict on the test set to get y_pred, y_pred_classes, y_true, and scores
+y_pred = model.predict(X_test_scaled)
+y_pred_classes = np.argmax(y_pred, axis=1)
+y_true = np.argmax(y_test, axis=1)
+scores = y_pred[:, 1] # ambil probabilitas prediksi kelas 1 (misalnya: Woll)
+
+
+# Buat list path lengkap untuk data test
+test_image_paths = []
+for fname in filenames_test:
+    # Tentukan label folder berdasarkan nama file (asumsi nama file unik di seluruh dataset)
+    # Ini mungkin perlu disesuaikan jika nama file tidak unik atau struktur folder berbeda
+    if 'Woll' in dataset_dir: # Asumsi nama folder kelas ada dalam dataset_dir
+         # Cari file di kedua folder kelas
+        path_woll = os.path.join(dataset_dir, 'Woll', fname)
+        path_asli = os.path.join(dataset_dir, 'Asli', fname)
+        if os.path.exists(path_woll):
+            test_image_paths.append(path_woll)
+        elif os.path.exists(path_asli):
+            test_image_paths.append(path_asli)
+        else:
+            test_image_paths.append(None) # Tambahkan None jika file tidak ditemukan
+    else: # Jika struktur folder standar Woll/ dan Asli/
+        path_woll = os.path.join(dataset_dir, 'Woll', fname)
+        path_asli = os.path.join(dataset_dir, 'Asli', fname)
+        if os.path.exists(path_woll):
+             test_image_paths.append(path_woll)
+        elif os.path.exists(path_asli):
+             test_image_paths.append(path_asli)
+        else:
+             test_image_paths.append(None) # Tambahkan None jika file tidak ditemukan
+
+
+# Pastikan panjang test_image_paths sama dengan panjang X_test
+if len(test_image_paths) != len(X_test):
+    print("Warning: Jumlah path gambar tidak sesuai dengan jumlah data test.")
+    # Handle error atau sesuaikan logika pencarian path
+
+# Buat dataframe atau list of dicts untuk menyimpan informasi gabungan
+test_results = []
+for i in range(len(X_test)):
+    if test_image_paths[i] is not None: # Only add if path is found
+        test_results.append({
+            'filename': filenames_test[i],
+            'filepath': test_image_paths[i],
+            'true_label': classes[y_true[i]],
+            'predicted_label': classes[y_pred_classes[i]],
+            'prediction_score': scores[i] # Using scores calculated previously
+        })
+
+# Tampilkan beberapa contoh hasil
+print("Contoh data test dengan path gambar dan hasil prediksi:")
+for i in range(min(5, len(test_results))):
+    print(test_results[i])
+
+
+# === 7. Argumentasi Gambar ===
+# === Menampilkan Contoh Gambar yang Diprediksi dengan Benar ===
+
+# Filter hasil yang prediksi dan label sebenarnya sesuai
+correct_predictions = [res for res in test_results if res['predicted_label'] == res['true_label']]
+
+# Pisahkan hasil yang benar berdasarkan kelas
+correct_woll = [res for res in correct_predictions if res['predicted_label'] == 'Woll']
+correct_asli = [res for res in correct_predictions if res['predicted_label'] == 'Asli']
+
+# Ambil beberapa contoh acak dari masing-masing kelas yang benar
+num_examples_per_class = 10 # Jumlah contoh per kelas yang ingin ditampilkan (diubah menjadi 10)
+np.random.shuffle(correct_woll)
+np.random.shuffle(correct_asli)
+
+display_correct_woll = correct_woll[:num_examples_per_class]
+display_correct_asli = correct_asli[:num_examples_per_class]
+
+# Gabungkan dan tampilkan
+print(f"\nMenampilkan {num_examples_per_class} Contoh Gambar yang Diprediksi Benar sebagai 'Woll' dan {num_examples_per_class} Contoh Gambar yang Diprediksi Benar sebagai 'Asli':")
+
+# Hitung jumlah baris yang dibutuhkan
+n_cols = 5 # Jumlah kolom per baris
+n_rows = int(np.ceil((len(display_correct_woll) + len(display_correct_asli)) / n_cols))
+
+plt.figure(figsize=(15, n_rows * 3)) # Sesuaikan ukuran figure
+
+# Gabungkan kedua list untuk iterasi
+all_correct_examples = display_correct_woll + display_correct_asli
+
+for i, result in enumerate(all_correct_examples):
+    filepath = result['filepath']
+    filename = result['filename']
+    true_label = result['true_label']
+    predicted_label = result['predicted_label']
+    score = result['prediction_score']
+
+    if filepath and os.path.exists(filepath):
+        img = load_img(filepath)
+        plt.subplot(n_rows, n_cols, i + 1) # Update subplot grid
+        plt.imshow(img)
+        plt.title(f"{predicted_label}") # Hanya menampilkan label prediksi
+        plt.axis('off')
+    else:
+        print(f"File tidak ditemukan: {filepath}")
+
+plt.tight_layout()
+plt.show()
+
+
+# === 8. Grafik Akurasi dan Loss ===
+
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Train Acc')
+plt.plot(history.history['val_accuracy'], label='Val Acc')
+plt.title('Akurasi per Epoch')
+plt.xlabel('Epoch')
+plt.ylabel('Akurasi')
+plt.legend()
+plt.grid(True)
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Val Loss')
+plt.title('Loss per Epoch')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+# === 9. Evaluasi Model ===
+loss, acc = model.evaluate(X_test_scaled, y_test, verbose=0)
+print(f"Akurasi Test: {acc * 100:.2f}%")
+print(f"Loss Test: {loss:.4f}")
+
+
+# === 10. Confusion Matrix & Laporan ===
+
+# y_pred = model.predict(X_test_scaled) # Removed duplicate calculation
+# y_pred_classes = np.argmax(y_pred, axis=1) # Removed duplicate calculation
+# y_true = np.argmax(y_test, axis=1) # Removed duplicate calculation
+
+print("\nLaporan Klasifikasi:")
+print(classification_report(y_true, y_pred_classes, target_names=classes))
+
+conf_mat = confusion_matrix(y_true, y_pred_classes)
+sns.heatmap(conf_mat, annot=True, fmt='d', cmap='Blues', xticklabels=classes, yticklabels=classes)
+plt.xlabel('Prediksi')
+plt.ylabel('Label Sebenarnya')
+plt.title('Confusion Matrix')
+plt.show()
+
+
+# === 11. Save Model ===
+
+model.save('/content/gdrive/MyDrive/model_noken_final.h5')
+
+
+
+from tensorflow.keras.models import load_model
+
+# Load model dari file .h5
+model = load_model('/content/gdrive/MyDrive/model_noken_final.h5')  # ganti dengan nama file model kamu
+
+# === Fungsi untuk Deteksi Noken dari Gambar Tunggal dan Menampilkan Hasil ===
+def predict_noken_and_show(image_path, model, base_cnn, scaler, classes, image_size):
+    """
+    Melakukan prediksi jenis noken dari sebuah file gambar dan menampilkan gambar serta hasilnya.
+
+    Args:
+        image_path (str): Path lengkap ke file gambar.
+        model (keras.Model): Model MLP yang sudah dilatih.
+        base_cnn (keras.Model): Model CNN (MobileNetV2) untuk ekstraksi fitur.
+        scaler (sklearn.preprocessing.StandardScaler): Scaler yang sudah dilatih.
+        classes (list): List nama kelas (misal: ['Woll', 'Asli']).
+        image_size (tuple): Ukuran gambar target (misal: (128, 128)).
+
+    Returns:
+        None
+    """
+    if not os.path.exists(image_path):
+        print(f"Error: File gambar tidak ditemukan di {image_path}")
+        return
+
+    try:
+        # Tampilkan gambar
+        img_display = load_img(image_path)
+        plt.imshow(img_display)
+        plt.title(f"Gambar: {os.path.basename(image_path)}")
+        plt.axis('off')
+        plt.show()
+
+        # Load dan preprocess gambar untuk prediksi
+        img_array = img_to_array(load_img(image_path, target_size=image_size))
+        img_array = np.expand_dims(img_array, axis=0) # Tambahkan dimensi batch
+        img_array = preprocess_input(img_array) # Preprocess sesuai MobileNetV2
+
+        # Ekstraksi fitur menggunakan base_cnn
+        features = base_cnn.predict(img_array, verbose=0)
+        # There seems to be an extra '0' here, I will remove it.
+
+        # Skalakan fitur menggunakan scaler yang sudah dilatih
+        scaled_features = scaler.transform(features)
+
+        # Prediksi menggunakan model MLP
+        predictions = model.predict(scaled_features)
+
+        # Ambil kelas dengan probabilitas tertinggi
+        predicted_class_index = np.argmax(predictions, axis=1)[0]
+        predicted_class = classes[predicted_class_index]
+
+        # Ambil skor kepercayaan (probabilitas) untuk kelas yang diprediksi
+        confidence_score = predictions[0][predicted_class_index]
+
+        # Tentukan skor yang akan ditampilkan (maksimal 95%)
+        displayed_percentage = min(confidence_score * 100, 95.0)
+
+        print(f"Deteksi untuk gambar '{os.path.basename(image_path)}':")
+        print(f"Jenis Noken: {predicted_class}")
+        print(f"Skor Kepercayaan: {displayed_percentage:.1f}%") # Menampilkan persentase dengan 1 desimal, maksimal 95.0%
+
+    except Exception as e:
+        print(f"Terjadi error saat memproses gambar '{image_path}': {e}")
+
+# === Contoh Penggunaan Fungsi dengan Gambar Upload ===
+from google.colab import files
+import matplotlib.pyplot as plt # Pastikan matplotlib diimpor
+
+uploaded = files.upload()
+
+for filename in uploaded.keys():
+    predict_noken_and_show(
+        filename, model, base_cnn, scaler, classes, image_size
+    )
+
+model.save('/content/drive/MyDrive/model_noken_final.keras')
+
+
+# === 12. Simpan Model dalam Format .keras ===
+
+Menyimpan model dalam format `.keras` adalah cara yang disarankan oleh Keras dan dapat dengan mudah dimuat kembali di lingkungan lain, termasuk saat Anda ingin mengintegrasikan model ke dalam aplikasi web.
+
+# Simpan model dalam format .keras ke Google Drive
+# Pastikan folder 'MyDrive' terhubung dan path sudah benar
+model_save_path = '/content/drive/MyDrive/model_noken_final.keras'
+model.save(model_save_path)
+
+print(f"Model berhasil disimpan di: {model_save_path}")
+
+import numpy as np
+np.savez("fitur_gambar.npz", features=X, filename=np.array(filenames))
+print("✅ fitur_gambar.npz dibuat:", np.load("fitur_gambar.npz").files)
+
